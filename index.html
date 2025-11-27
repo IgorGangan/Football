@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>2D Soccer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- MENU -->
+  <div id="menu">
+    <div class="panel">
+      <h1>2D Soccer</h1>
+
+      <label for="modeSelect">Mode</label>
+      <select id="modeSelect">
+        <option value="bot" selected>Vs Bot</option>
+        <option value="2p">2 Players</option>
+      </select>
+
+      <div class="row">
+        <div class="col">
+          <label for="p1Name">Player 1 name</label>
+          <input id="p1Name" type="text" placeholder="Player 1" maxlength="16" />
+        </div>
+        <div class="col" id="p2NameWrap">
+          <label for="p2Name">Player 2 name</label>
+          <input id="p2Name" type="text" placeholder="Player 2" maxlength="16" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col" id="diffWrap">
+          <label for="difficulty">Difficulty (Bot)</label>
+          <select id="difficulty">
+            <option value="easy">Easy 🟢</option>
+            <option value="medium" selected>Medium 🟡</option>
+            <option value="hard">Hard 🔴</option>
+          </select>
+        </div>
+
+        <div class="col">
+          <label for="matchTime">Match Time</label>
+          <select id="matchTime">
+            <option value="60">60s</option>
+            <option value="90" selected>90s</option>
+            <option value="120">120s</option>
+            <option value="180">180s</option>
+          </select>
+        </div>
+      </div>
+
+      <button id="playBtn">PLAY ▶</button>
+
+      <p class="hint">
+        Desktop: <b>P1 WASD</b> • <b>P2 Arrow Keys</b><br/>
+        Mobile/iPad: use the on-screen joysticks.
+      </p>
+    </div>
+  </div>
+
+  <!-- TOP HUD -->
+  <div id="hud">
+    <div class="hudBox left">
+      <button id="homeBtn">⟵ HOME</button>
+    </div>
+
+    <div class="hudBox mid">
+      <div class="names"><span id="hudP1">P1</span> vs <span id="hudP2">P2</span></div>
+      <div class="score" id="scoreText">0 - 0</div>
+      <div class="meta">
+        <span class="pill" id="modeText">MODE</span>
+        <span class="pill" id="diffText">DIFF</span>
+        <span class="pill" id="timeText">TIME</span>
+      </div>
+    </div>
+
+    <div class="hudBox right">
+      <div class="controlsLine">
+        <span class="chip">P1</span> WASD
+        <span class="chip">P2</span> ARROWS
+      </div>
+    </div>
+  </div>
+
+  <!-- OVERLAY (countdown/goal/end) -->
+  <div id="overlayText"></div>
+
+  <!-- RESULT MODAL -->
+  <div id="resultModal">
+    <div class="panel">
+      <h2 id="resultTitle">Match Over</h2>
+      <div id="resultScore" class="resultScore">0 - 0</div>
+      <div id="resultLine" class="resultLine">Winner: ...</div>
+
+      <div class="btnRow">
+        <button id="againBtn" class="primary">PLAY AGAIN</button>
+        <button id="homeBtn2" class="ghost">HOME</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CANVAS -->
+  <canvas id="gameCanvas" width="1100" height="600"></canvas>
+
+  <!-- MOBILE CONTROLS -->
+  <div id="mobileControls">
+    <div class="joyWrap" id="joy1Wrap">
+      <div class="joyBase" id="joy1Base">
+        <div class="joyKnob" id="joy1Knob"></div>
+      </div>
+      <div class="joyLabel">P1</div>
+    </div>
+
+    <div class="joyWrap" id="joy2Wrap">
+      <div class="joyBase" id="joy2Base">
+        <div class="joyKnob" id="joy2Knob"></div>
+      </div>
+      <div class="joyLabel">P2</div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

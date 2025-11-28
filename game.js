@@ -1,4 +1,14 @@
 (() => {
+  // ============================================================
+  // 2D Soccer - Single file game.js
+  // Requires these IDs in HTML:
+  // gameCanvas, menu, playBtn, homeBtn, hud, overlayText,
+  // modeSelect, p1Name, p2Name, p2NameWrap, diffWrap, difficulty, matchTime,
+  // hudP1, hudP2, scoreText, modeText, diffText, timeText,
+  // resultModal, resultTitle, resultScore, resultLine, againBtn, homeBtn2,
+  // mobileControls, joy1Base, joy1Knob, joy2Wrap, joy2Base, joy2Knob
+  // ============================================================
+
   // ---------------- DOM ----------------
   const canvas = document.getElementById("gameCanvas");
   const ctx = canvas.getContext("2d");
@@ -42,6 +52,7 @@
   const H = canvas.height;
 
   // ---------------- Inject CSS for penalty dots ----------------
+  // (if your HUD has no penalty dots, it's still fine)
   (function injectPenaltyCSS(){
     const css = `
       .penHudLine{ width:100%; display:none; margin-top:8px; }
@@ -75,31 +86,48 @@
   })();
 
   // ---------------- Difficulty configs ----------------
-  // GK non OP: un po' più forte di prima, ma con errori + dive a cooldown
+  // GK stronger than before, but human (mistakes, reaction, wrong guesses)
   const DIFF = {
-    easy:   { botSpeed: 2.9, goalieSpeed: 2.6, botKick: 9.5,  error: 0.30, predict: 0.18, gkMistake: 0.26, gkReact: 0.22 },
-    medium: { botSpeed: 4.8, goalieSpeed: 3.5, botKick: 12.2, error: 0.14, predict: 0.28, gkMistake: 0.17, gkReact: 0.14 },
-    hard:   { botSpeed: 6.6, goalieSpeed: 4.6, botKick: 14.3, error: 0.05, predict: 0.38, gkMistake: 0.10, gkReact: 0.10 },
+    easy: {
+      botSpeed: 2.9, botKick: 9.5,  error: 0.30, predict: 0.18,
+      gkBaseSpeed: 3.0, gkReact: 0.22, gkMistake: 0.22, gkDiveAggro: 0.65, penWrong: 0.38
+    },
+    medium: {
+      botSpeed: 4.8, botKick: 12.2, error: 0.14, predict: 0.28,
+      gkBaseSpeed: 3.8, gkReact: 0.14, gkMistake: 0.14, gkDiveAggro: 0.78, penWrong: 0.28
+    },
+    hard: {
+      botSpeed: 6.6, botKick: 14.3, error: 0.05, predict: 0.38,
+      gkBaseSpeed: 4.7, gkReact: 0.10, gkMistake: 0.09, gkDiveAggro: 0.92, penWrong: 0.18
+    },
   };
 
-  // ---------------- Gameplay tuning ----------------
-  const PLAYER_R = 26;  // big players
-  const GOALIE_R = 16;  // <-- richiesto
+  // ---------------- Sizes ----------------
+  const PLAYER_R = 26;
+  const GOALIE_R = 18; // <-- richiesto
   const BALL_R   = 11;
 
-  // Porta grande (già sistemata): se vuoi ancora più grande alza goalHalf
-  const goalHalf = 125;
+  // ---------------- Field / goal ----------------
+  const goalHalf = 125; // big goals
   const postR = 10;
+  const goalL = { x: 0, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:0,y:H/2-goalHalf},{x:0,y:H/2+goalHalf}] };
+  const goalR = { x: W, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:W,y:H/2-goalHalf},{x:W,y:H/2+goalHalf}] };
 
-  // Trick-shot boost sui rimbalzi
-  const WALL_TRICK_BOOST = 1.12;   // +12% velocità dopo rimbalzo
-  const MAX_BALL_SPEED   = 22.0;   // cap per non impazzire
-  const BOUNCE_COOLDOWN  = 0.09;   // evita boost multipli nello stesso rimbalzo
+  // GK boxes
+  const boxH = 270, boxW = 135;
+  const boxL = { x: 0, y: H/2 - boxH/2, w: boxW, h: boxH };
+  const boxR = { x: W - boxW, y: H/2 - boxH/2, w: boxW, h: boxH };
 
-  // Dive GK (tuffo)
-  const DIVE_TIME = 0.18;            // durata tuffo
+  // ---------------- Trick shot walls boost ----------------
+  const WALL_TRICK_BOOST = 1.14; // +14% per bounce
+  const MAX_BALL_SPEED = 24.0;
+  const BOUNCE_CD = 0.10;
+
+  // ---------------- Dive params ----------------
+  const DIVE_TIME = 0.18;
   const DIVE_COOLDOWN_MIN = 0.75;
-  const DIVE_COOLDOWN_MAX = 1.35;
+  const DIVE_COOLDOWN_MAX = 1.25;
+  const DIVE_BURST = 1.75; // how strong the dive move feels (not OP)
 
   // ---------------- Game state ----------------
   let running = false;
@@ -107,7 +135,7 @@
   let inCountdown = false;
   let countdownTimer = null;
 
-  let gameMode = "bot";
+  let gameMode = "bot";       // "bot" or "2p"
   let difficulty = "medium";
   let matchSeconds = 90;
   let remaining = 90;
@@ -131,6 +159,134 @@
     uiLock: 0,
   };
 
+  // ---------------- Entities ----------------
+  const P1 = { name:"P1", x:240, y:H/2, r:PLAYER_R, speed:5.35, color:"#1a66ff", lastDirX:1, lastDirY:0 };
+  const P2 = { name:"P2", x:W-240, y:H/2, r:PLAYER_R, speed:5.35, color:"#ff9f1a", lastDirX:-1, lastDirY:0 };
+
+  const GK_L = makeGoalie(true, "#25e6ff");
+  const GK_R = makeGoalie(false,"#ff2d2d");
+
+  const ball = { x:W/2, y:H/2, r:BALL_R, vx:0, vy:0, trail:[], bounceCd:0 };
+
+  function makeGoalie(isLeft, color){
+    return {
+      isLeft,
+      x: isLeft ? 84 : W-84,
+      y: H/2,
+      r: GOALIE_R,
+      color,
+      // human behavior timers
+      mistakeT: 0,
+      reactT: 0,
+      // dive state
+      diveT: 0,
+      diveCd: 0,
+      diveY: H/2,
+      // trail while diving
+      diveTrail: [],
+      // personality (different brains)
+      ai: {
+        speedMul: 1,
+        reactMul: 1,
+        mistakeMul: 1,
+        slack: 1,
+        aggro: 1,
+        // penalties
+        penWrong: 0.25,
+        penCommit: 0.65,
+        // style bias
+        style: 0, // -1 safe, +1 aggressive
+      },
+      // penalty plan
+      pen: { planY:null, planX:null, react:0, committed:false },
+    };
+  }
+
+  // ---------------- Utils ----------------
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const dist = (ax,ay,bx,by)=>Math.hypot(bx-ax,by-ay);
+  const lerp = (a,b,t)=>a + (b-a)*t;
+  const rand = (a,b)=>a + Math.random()*(b-a);
+
+  function setOverlay(text, on=true){
+    overlayEl.textContent = text;
+    overlayEl.style.opacity = on ? 1 : 0;
+  }
+  function setScoreUI(){ scoreText.textContent = `${scoreLeft} - ${scoreRight}`; }
+  function setTimeUI(){
+    if (pen.active) { timeText.textContent = "PENALTIES"; return; }
+    const m = Math.floor(remaining / 60);
+    const s = Math.floor(remaining % 60);
+    timeText.textContent = `TIME ${m}:${String(s).padStart(2,"0")}`;
+  }
+
+  function getBallSpeed(){
+    return Math.hypot(ball.vx, ball.vy);
+  }
+  function clampBallSpeed(){
+    const s = getBallSpeed();
+    if (s > MAX_BALL_SPEED) {
+      const k = MAX_BALL_SPEED / (s || 1);
+      ball.vx *= k; ball.vy *= k;
+    }
+  }
+
+  // ---------------- INPUT (keyboard) ----------------
+  const keys = Object.create(null);
+  window.addEventListener("keydown", (e) => {
+    const k = e.key;
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
+  }, { passive: false });
+  document.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
+  document.addEventListener("keyup",   (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // ---------------- Mobile joystick ----------------
+  const joy = {
+    p1: { active:false, id:null, vx:0, vy:0, cx:0, cy:0 },
+    p2: { active:false, id:null, vx:0, vy:0, cx:0, cy:0 },
+  };
+
+  function setKnob(knob, vx, vy) {
+    const max = 40;
+    knob.style.transform = `translate(calc(-50% + ${vx*max}px), calc(-50% + ${vy*max}px))`;
+  }
+
+  function bindJoystick(base, knob, stateKey) {
+    const st = joy[stateKey];
+    base.addEventListener("pointerdown", (e) => {
+      st.active = true; st.id = e.pointerId;
+      base.setPointerCapture(e.pointerId);
+      const r = base.getBoundingClientRect();
+      st.cx = r.left + r.width/2; st.cy = r.top + r.height/2;
+      move(e);
+    });
+    base.addEventListener("pointermove", move);
+    base.addEventListener("pointerup", end);
+    base.addEventListener("pointercancel", end);
+
+    function move(e){
+      if (!st.active || st.id !== e.pointerId) return;
+      const dx = e.clientX - st.cx;
+      const dy = e.clientY - st.cy;
+      const d = Math.hypot(dx,dy) || 1;
+      const maxD = 55;
+      const nd = Math.min(d, maxD);
+      st.vx = (dx/d) * (nd/maxD);
+      st.vy = (dy/d) * (nd/maxD);
+      setKnob(knob, st.vx, st.vy);
+    }
+    function end(e){
+      if (st.id !== e.pointerId) return;
+      st.active = false; st.id = null; st.vx = 0; st.vy = 0;
+      setKnob(knob, 0, 0);
+    }
+  }
+
+  bindJoystick(joy1Base, joy1Knob, "p1");
+  bindJoystick(joy2Base, joy2Knob, "p2");
+
+  const isTouchDevice = () => ("ontouchstart" in window || navigator.maxTouchPoints > 0);
+
   // ---------------- Penalty HUD ----------------
   let penHudWrap, penRowL, penRowR, penDotsL, penDotsR;
   function ensurePenaltyHud(){
@@ -146,7 +302,6 @@
 
     const nameL = document.createElement("span"); nameL.className = "penName"; nameL.id = "penNameL";
     const nameR = document.createElement("span"); nameR.className = "penName"; nameR.id = "penNameR";
-    nameL.textContent = "LEFT"; nameR.textContent = "RIGHT";
 
     const label1 = document.createElement("span"); label1.className = "penLabel"; label1.textContent = "PEN";
     const label2 = document.createElement("span"); label2.className = "penLabel"; label2.textContent = "PEN";
@@ -161,14 +316,12 @@
     penHudWrap.appendChild(penRowR);
     midBox.appendChild(penHudWrap);
   }
-
   function mkDot(state, extra=false){
     const s = document.createElement("span");
     s.className = "dot " + (state === "goal" ? "goal" : state === "miss" ? "miss" : "pending");
     if (extra) s.classList.add("extra");
     return s;
   }
-
   function renderPenaltyDots(){
     ensurePenaltyHud();
     if (!penHudWrap) return;
@@ -206,171 +359,50 @@
     }
   }
 
-  // ---------------- Input ----------------
-  const keys = Object.create(null);
-
-  window.addEventListener("keydown", (e) => {
-    const k = e.key;
-    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(k)) e.preventDefault();
-  }, { passive: false });
-
-  document.addEventListener("keydown", (e) => { keys[e.key.toLowerCase()] = true; });
-  document.addEventListener("keyup",   (e) => { keys[e.key.toLowerCase()] = false; });
-
-  // ---------------- Mobile joystick ----------------
-  const joy = {
-    p1: { active:false, id:null, vx:0, vy:0, cx:0, cy:0 },
-    p2: { active:false, id:null, vx:0, vy:0, cx:0, cy:0 },
-  };
-
-  function setKnob(knob, vx, vy) {
-    const max = 40;
-    knob.style.transform = `translate(calc(-50% + ${vx*max}px), calc(-50% + ${vy*max}px))`;
+  // ---------------- Boxes / bounds ----------------
+  function goalieBounds(gk){
+    const b = gk.isLeft ? boxL : boxR;
+    return {
+      minX: b.x + gk.r + 6,
+      maxX: b.x + b.w - gk.r - 6,
+      minY: b.y + gk.r + 6,
+      maxY: b.y + b.h - gk.r - 6,
+    };
   }
 
-  function bindJoystick(base, knob, stateKey) {
-    const st = joy[stateKey];
-
-    base.addEventListener("pointerdown", (e) => {
-      st.active = true; st.id = e.pointerId;
-      base.setPointerCapture(e.pointerId);
-      const r = base.getBoundingClientRect();
-      st.cx = r.left + r.width/2; st.cy = r.top + r.height/2;
-      move(e);
-    });
-    base.addEventListener("pointermove", move);
-    base.addEventListener("pointerup", end);
-    base.addEventListener("pointercancel", end);
-
-    function move(e){
-      if (!st.active || st.id !== e.pointerId) return;
-      const dx = e.clientX - st.cx;
-      const dy = e.clientY - st.cy;
-      const d = Math.hypot(dx,dy) || 1;
-      const maxD = 55;
-      const nd = Math.min(d, maxD);
-      st.vx = (dx/d) * (nd/maxD);
-      st.vy = (dy/d) * (nd/maxD);
-      setKnob(knob, st.vx, st.vy);
-    }
-    function end(e){
-      if (st.id !== e.pointerId) return;
-      st.active = false; st.id = null; st.vx = 0; st.vy = 0;
-      setKnob(knob, 0, 0);
-    }
-  }
-
-  bindJoystick(joy1Base, joy1Knob, "p1");
-  bindJoystick(joy2Base, joy2Knob, "p2");
-
-  const isTouchDevice = () => ("ontouchstart" in window || navigator.maxTouchPoints > 0);
-
-  // ---------------- Field / goals ----------------
-  const goalL = { x: 0, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:0,y:H/2-goalHalf},{x:0,y:H/2+goalHalf}] };
-  const goalR = { x: W, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:W,y:H/2-goalHalf},{x:W,y:H/2+goalHalf}] };
-
-  // keeper boxes
-  const boxH = 260, boxW = 125;
-  const boxL = { x: 0, y: H/2 - boxH/2, w: boxW, h: boxH };
-  const boxR = { x: W - boxW, y: H/2 - boxH/2, w: boxW, h: boxH };
-
-  // ---------------- Entities ----------------
-  const P1 = { name:"P1", x:240, y:H/2, r:PLAYER_R, speed:5.35, color:"#1a66ff", lastDirX:1, lastDirY:0 };
-  const P2 = { name:"P2", x:W-240, y:H/2, r:PLAYER_R, speed:5.35, color:"#ff9f1a", lastDirX:-1, lastDirY:0 };
-
-  // Goalkeepers with dive-state
-  const GK_L = {
-    x:78, y:H/2, r:GOALIE_R, color:"#25e6ff",
-    mistakeT:0, reactT:0,
-    diveT:0, diveCd:0, diveY:H/2, diveUsed:false,
-    ai: { speedMul:1, mistakeMul:1, reactMul:1, aimSlack:1, diveChance:1, divePower:1, styleBias:0 },
-    pen: { planY:null, planX:null, react:0 }
-  };
-  const GK_R = {
-    x:W-78, y:H/2, r:GOALIE_R, color:"#ff2d2d",
-    mistakeT:0, reactT:0,
-    diveT:0, diveCd:0, diveY:H/2, diveUsed:false,
-    ai: { speedMul:1, mistakeMul:1, reactMul:1, aimSlack:1, diveChance:1, divePower:1, styleBias:0 },
-    pen: { planY:null, planX:null, react:0 }
-  };
-
-  const ball = { x:W/2, y:H/2, r:BALL_R, vx:0, vy:0, trail:[], bounceCd:0 };
-
-  // ---------------- Utils ----------------
-  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  const dist = (ax,ay,bx,by)=>Math.hypot(bx-ax,by-ay);
-  const lerp = (a,b,t)=>a+(b-a)*t;
-  const rand = (a,b)=>a + Math.random()*(b-a);
-
-  function setOverlay(text, on=true){
-    overlayEl.textContent = text;
-    overlayEl.style.opacity = on ? 1 : 0;
-  }
-  function setScoreUI(){ scoreText.textContent = `${scoreLeft} - ${scoreRight}`; }
-
-  function setTimeUI(){
-    if (pen.active) { timeText.textContent = "PENALTIES"; return; }
-    const m = Math.floor(remaining / 60);
-    const s = Math.floor(remaining % 60);
-    timeText.textContent = `TIME ${m}:${String(s).padStart(2,"0")}`;
-  }
-
-  function clampBallSpeed(){
-    const s = Math.hypot(ball.vx, ball.vy);
-    if (s > MAX_BALL_SPEED) {
-      const k = MAX_BALL_SPEED / (s || 1);
-      ball.vx *= k; ball.vy *= k;
-    }
-  }
-
-  // ---------------- Unique goalie brains ----------------
+  // ---------------- Brain init (each GK unique) ----------------
   function initGoalieBrains(){
-    // Ogni GK diverso (anche stesso difficulty)
-    // styleBias: (-1)=prudente, (0)=normale, (1)=aggressivo
-    function rollAI(diff){
-      let sMin,sMax,mMin,mMax,rMin,rMax,slMin,slMax, dcMin,dcMax, dpMin,dpMax;
-      if (diff === "easy") {
-        sMin=0.78; sMax=0.98;
-        mMin=1.10; mMax=1.55;
-        rMin=1.05; rMax=1.55;
-        slMin=1.05; slMax=1.45;
-        dcMin=0.85; dcMax=1.35; // dive chance
-        dpMin=0.95; dpMax=1.30; // dive power
-      } else if (diff === "hard") {
-        sMin=0.88; sMax=1.12;
-        mMin=0.85; mMax=1.20;
-        rMin=0.85; rMax=1.15;
-        slMin=0.95; slMax=1.20;
-        dcMin=0.85; dcMax=1.25;
-        dpMin=0.95; dpMax=1.30;
-      } else {
-        sMin=0.82; sMax=1.06;
-        mMin=0.95; mMax=1.35;
-        rMin=0.92; rMax=1.28;
-        slMin=1.00; slMax=1.30;
-        dcMin=0.85; dcMax=1.30;
-        dpMin=0.95; dpMax=1.30;
-      }
-      const styleBias = rand(-1, 1); // personalità
-      return {
-        speedMul: rand(sMin,sMax),
-        mistakeMul: rand(mMin,mMax),
-        reactMul: rand(rMin,rMax),
-        aimSlack: rand(slMin,slMax),
-        diveChance: rand(dcMin,dcMax) * (0.95 + 0.25*Math.max(0, styleBias)),
-        divePower:  rand(dpMin,dpMax) * (0.95 + 0.20*Math.max(0, styleBias)),
-        styleBias
-      };
+    const cfg = DIFF[difficulty] || DIFF.medium;
+
+    function roll(gk){
+      // style: + = aggressive (dives more), - = safe
+      const style = rand(-1, 1);
+
+      // stronger but human
+      const speedMul   = rand(0.92, 1.10) * (1 + 0.06*Math.max(0, style));
+      const reactMul   = rand(0.90, 1.22) * (1 + 0.10*Math.max(0, -style)); // safe reacts a bit earlier sometimes
+      const mistakeMul = rand(0.90, 1.35) * (1 + 0.10*Math.max(0, style));  // aggressive can overcommit => mistakes
+      const slack      = rand(0.95, 1.35); // aim looseness
+
+      const aggro      = rand(0.90, 1.15) * (1 + 0.15*Math.max(0, style));
+      const penWrong   = clamp(cfg.penWrong * rand(0.85, 1.20) * (1 + 0.10*Math.max(0, style)), 0.08, 0.48);
+      const penCommit  = clamp(0.64 + 0.12*style + rand(-0.08, 0.08), 0.45, 0.85);
+
+      gk.ai.speedMul = speedMul;
+      gk.ai.reactMul = reactMul;
+      gk.ai.mistakeMul = mistakeMul;
+      gk.ai.slack = slack;
+      gk.ai.aggro = aggro;
+      gk.ai.penWrong = penWrong;
+      gk.ai.penCommit = penCommit;
+      gk.ai.style = style;
     }
 
-    const aL = rollAI(difficulty);
-    const aR = rollAI(difficulty);
+    roll(GK_L);
+    roll(GK_R);
 
-    Object.assign(GK_L.ai, aL);
-    Object.assign(GK_R.ai, aR);
-
-    // forziamo un po' di differenza (non identici)
-    if (Math.abs(GK_L.ai.styleBias - GK_R.ai.styleBias) < 0.25) GK_R.ai.styleBias += 0.35 * (Math.random()<0.5?-1:1);
+    // ensure they don't feel identical
+    if (Math.abs(GK_L.ai.style - GK_R.ai.style) < 0.25) GK_R.ai.style += (Math.random()<0.5?-1:1)*0.35;
   }
 
   // ---------------- Reset ----------------
@@ -378,17 +410,11 @@
     P1.x=240; P1.y=H/2;
     P2.x=W-240; P2.y=H/2;
 
-    GK_L.x=78; GK_L.y=H/2;
-    GK_R.x=W-78; GK_R.y=H/2;
+    GK_L.x = 84; GK_L.y = H/2;
+    GK_R.x = W-84; GK_R.y = H/2;
 
-    GK_L.mistakeT = GK_L.reactT = 0;
-    GK_R.mistakeT = GK_R.reactT = 0;
-
-    GK_L.diveT = 0; GK_L.diveCd = 0; GK_L.diveUsed=false;
-    GK_R.diveT = 0; GK_R.diveCd = 0; GK_R.diveUsed=false;
-
-    GK_L.pen.planX = GK_L.pen.planY = null; GK_L.pen.react = 0;
-    GK_R.pen.planX = GK_R.pen.planY = null; GK_R.pen.react = 0;
+    resetGoalieState(GK_L);
+    resetGoalieState(GK_R);
 
     ball.x=W/2; ball.y=H/2;
     ball.vx=0; ball.vy=0;
@@ -396,7 +422,19 @@
     ball.bounceCd=0;
   }
 
-  // ---------------- Collision / kick ----------------
+  function resetGoalieState(gk){
+    gk.mistakeT = 0;
+    gk.reactT = 0;
+    gk.diveT = 0;
+    gk.diveCd = 0;
+    gk.diveY = H/2;
+    gk.diveTrail = [];
+    gk.pen.planX = gk.pen.planY = null;
+    gk.pen.react = 0;
+    gk.pen.committed = false;
+  }
+
+  // ---------------- Ball collisions ----------------
   function resolveBallCircle(circle, kickStrength){
     const dx = ball.x - circle.x;
     const dy = ball.y - circle.y;
@@ -409,8 +447,9 @@
     ball.x += nx * overlap;
     ball.y += ny * overlap;
 
-    const cur = Math.hypot(ball.vx, ball.vy);
+    const cur = getBallSpeed();
     const s = kickStrength + cur * 0.18;
+
     ball.vx = nx * s;
     ball.vy = ny * s;
 
@@ -443,21 +482,19 @@
 
   function applyWallTrickBoost(){
     if (ball.bounceCd > 0) return;
-    const s = Math.hypot(ball.vx, ball.vy);
+    const s = getBallSpeed();
     const ns = Math.min(MAX_BALL_SPEED, s * WALL_TRICK_BOOST);
     const k = ns / (s || 1);
     ball.vx *= k; ball.vy *= k;
-    ball.bounceCd = BOUNCE_COOLDOWN;
+    ball.bounceCd = BOUNCE_CD;
   }
 
   function ballWalls(){
     let bounced = false;
 
-    // top/bottom
     if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy = Math.abs(ball.vy)*0.98; bounced = true; }
     if (ball.y + ball.r > H) { ball.y = H - ball.r; ball.vy = -Math.abs(ball.vy)*0.98; bounced = true; }
 
-    // left/right (only if NOT in goal mouth)
     if (ball.x - ball.r < 0) {
       const inMouth = (ball.y >= goalL.y1 && ball.y <= goalL.y2);
       if (!inMouth) { ball.x = ball.r; ball.vx = Math.abs(ball.vx)*0.98; bounced = true; }
@@ -475,6 +512,7 @@
   function startCountdown(sec){
     if (countdownTimer) clearInterval(countdownTimer);
     inCountdown = true;
+
     let t = sec;
     setOverlay(String(t), true);
 
@@ -491,7 +529,7 @@
     }, 900);
   }
 
-  // ---------------- Drawing ----------------
+  // ---------------- Rendering ----------------
   function drawField(){
     ctx.clearRect(0,0,W,H);
     ctx.fillStyle = "#23b75f";
@@ -528,14 +566,30 @@
     ctx.stroke();
   }
 
-  function drawTrail(){
+  function drawBallTrail(){
     for(let i=0;i<ball.trail.length;i++){
       const t = ball.trail[i];
       const a = i/ball.trail.length;
-      const alpha = 0.07 + a*0.55;
+      const alpha = 0.06 + a*0.55;
       ctx.beginPath();
       ctx.arc(t.x,t.y,4,0,Math.PI*2);
       ctx.fillStyle = `rgba(255,255,255,${alpha*0.55})`;
+      ctx.fill();
+    }
+  }
+
+  function drawGoalieDiveTrail(gk){
+    if (!gk.diveTrail.length) return;
+    for (let i=0;i<gk.diveTrail.length;i++){
+      const p = gk.diveTrail[i];
+      const a = i / gk.diveTrail.length;
+      const alpha = 0.04 + a * 0.62;
+
+      // colored "stripe"
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 6 + a*6, 0, Math.PI*2);
+      const rgb = hexToRgb(gk.color) || {r:255,g:255,b:255};
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha*0.38})`;
       ctx.fill();
     }
   }
@@ -548,6 +602,10 @@
   }
 
   function drawEntities(){
+    // GK dive stripe behind them
+    drawGoalieDiveTrail(GK_L);
+    drawGoalieDiveTrail(GK_R);
+
     drawCircle(P1.x,P1.y,P1.r,P1.color);
     drawCircle(P2.x,P2.y,P2.r,P2.color);
     drawCircle(GK_L.x,GK_L.y,GK_L.r,GK_L.color);
@@ -555,14 +613,28 @@
     drawCircle(ball.x,ball.y,ball.r,"white");
   }
 
-  // ---------------- Inputs ----------------
+  function hexToRgb(hex){
+    // supports "#rrggbb"
+    if (!hex || typeof hex !== "string") return null;
+    const h = hex.trim();
+    if (!/^#([0-9a-fA-F]{6})$/.test(h)) return null;
+    return {
+      r: parseInt(h.slice(1,3),16),
+      g: parseInt(h.slice(3,5),16),
+      b: parseInt(h.slice(5,7),16),
+    };
+  }
+
+  // ---------------- Player inputs ----------------
   function getP1Input(){
     let mx=0,my=0;
     if (keys["w"]) my -= 1;
     if (keys["s"]) my += 1;
     if (keys["a"]) mx -= 1;
     if (keys["d"]) mx += 1;
+
     mx += joy.p1.vx; my += joy.p1.vy;
+
     const m = Math.hypot(mx,my);
     if (m > 1e-6) { mx/=m; my/=m; }
     return {mx,my};
@@ -574,7 +646,9 @@
     if (keys["arrowdown"]) my += 1;
     if (keys["arrowleft"]) mx -= 1;
     if (keys["arrowright"]) mx += 1;
+
     mx += joy.p2.vx; my += joy.p2.vy;
+
     const m = Math.hypot(mx,my);
     if (m > 1e-6) { mx/=m; my/=m; }
     return {mx,my};
@@ -584,153 +658,181 @@
     if (Math.abs(mx) + Math.abs(my) > 0.001) { p.lastDirX = mx; p.lastDirY = my; }
   }
 
-  // ---------------- Goalie bounds ----------------
-  function goalieBoundsLeft(gk){
-    return {
-      minX: boxL.x + gk.r + 6,
-      maxX: boxL.x + boxL.w - gk.r - 6,
-      minY: boxL.y + gk.r + 6,
-      maxY: boxL.y + boxL.h - gk.r - 6
-    };
-  }
-  function goalieBoundsRight(gk){
-    return {
-      minX: boxR.x + gk.r + 6,
-      maxX: boxR.x + boxR.w - gk.r - 6,
-      minY: boxR.y + gk.r + 6,
-      maxY: boxR.y + boxR.h - gk.r - 6
-    };
-  }
+  // ---------------- Goalkeepers "real" logic ----------------
+  function maybeTriggerHumanTimers(dt, cfg, gk){
+    gk.mistakeT = Math.max(0, gk.mistakeT - dt);
+    gk.reactT   = Math.max(0, gk.reactT   - dt);
 
-  // ---------------- Goalie mistakes + dive ----------------
-  function maybeTriggerGKBrain(dt, cfg, gk){
-    const mistakeP = (cfg.gkMistake * gk.ai.mistakeMul);
-    const reactP   = (cfg.gkReact   * gk.ai.reactMul);
+    // mistake windows: aim is looser / jitter
+    const mChance = cfg.gkMistake * gk.ai.mistakeMul;
+    const rChance = cfg.gkReact   * gk.ai.reactMul;
 
-    if (!inCountdown) {
-      if (gk.mistakeT <= 0 && Math.random() < mistakeP * dt) gk.mistakeT = 0.45 + Math.random()*0.35;
-      if (gk.reactT <= 0 && Math.random() < reactP * dt) gk.reactT = 0.12 + Math.random()*0.18;
+    if (!inCountdown && !pen.active) {
+      if (gk.mistakeT <= 0 && Math.random() < mChance * dt) gk.mistakeT = 0.35 + Math.random()*0.30;
+      if (gk.reactT   <= 0 && Math.random() < rChance * dt) gk.reactT   = 0.10 + Math.random()*0.14;
     }
   }
 
-  function maybeTriggerDiveNormal(dt, cfg, gk, isLeft){
-    // cooldown & active time
+  // Predict where ball crosses a vertical x (goal line-ish)
+  function predictBallYAtX(targetX){
+    // If vx is ~0, can't predict well
+    if (Math.abs(ball.vx) < 0.0001) return ball.y;
+    const t = (targetX - ball.x) / ball.vx;
+    // only look forward in time
+    if (t < 0) return ball.y;
+    return ball.y + ball.vy * t;
+  }
+
+  function shouldDiveAtGoal(gk, cfg){
+    // only dive if ball is fast AND going toward this goal AND close enough
+    const s = getBallSpeed();
+    if (s < 4.8) return false;
+
+    const toward = gk.isLeft ? (ball.vx < -1.3) : (ball.vx > 1.3);
+    if (!toward) return false;
+
+    const near = gk.isLeft ? (ball.x < W*0.40) : (ball.x > W*0.60);
+    if (!near) return false;
+
+    if (gk.diveCd > 0 || gk.diveT > 0) return false;
+
+    // if ball path would cross in/near goal mouth, dive more
+    const goalX = gk.isLeft ? 0 : W;
+    const py = predictBallYAtX(goalX);
+    const inMouth = (py >= (H/2 - goalHalf - 30) && py <= (H/2 + goalHalf + 30));
+
+    // aggressiveness by difficulty + personality
+    const baseChance = 0.14 + 0.10*(cfg.gkDiveAggro - 0.65); // from cfg
+    const styleBoost = 0.06*Math.max(0, gk.ai.style);
+    const mouthBoost = inMouth ? 0.10 : 0.00;
+
+    const chance = clamp((baseChance + styleBoost + mouthBoost) * gk.ai.aggro, 0.08, 0.34);
+
+    return Math.random() < chance;
+  }
+
+  function startDive(gk, yTarget){
+    const b = goalieBounds(gk);
+    gk.diveT = DIVE_TIME;
+    gk.diveCd = rand(DIVE_COOLDOWN_MIN, DIVE_COOLDOWN_MAX);
+    gk.diveY = clamp(yTarget, b.minY, b.maxY);
+
+    // add stripe instantly
+    gk.diveTrail.unshift({x:gk.x, y:gk.y});
+    if (gk.diveTrail.length > 18) gk.diveTrail.length = 18;
+  }
+
+  function updateGoalieDiveStripe(dt, gk){
+    // keep fade trail
+    if (gk.diveTrail.length) {
+      // slow decay
+      if (gk.diveT <= 0) {
+        // fade out quicker when not diving
+        if (Math.random() < 0.28) gk.diveTrail.shift();
+      }
+    }
+    // while diving, keep adding points
+    if (gk.diveT > 0) {
+      gk.diveTrail.push({x:gk.x, y:gk.y});
+      if (gk.diveTrail.length > 24) gk.diveTrail.shift();
+    }
+  }
+
+  function updateGoalieNormal(dt, cfg, gk){
+    const b = goalieBounds(gk);
+
     gk.diveCd = Math.max(0, gk.diveCd - dt);
     gk.diveT  = Math.max(0, gk.diveT  - dt);
 
-    // se sta già tuffandosi, basta (movimento lo fa updateGoalies)
-    if (gk.diveT > 0) return;
+    maybeTriggerHumanTimers(dt, cfg, gk);
 
-    // trigger dive solo se palla in arrivo veloce verso la porta
-    const speed = Math.hypot(ball.vx, ball.vy);
-    if (speed < 4.2) return;
-    if (gk.diveCd > 0) return;
-
-    const toward = isLeft ? (ball.vx < -1.7) : (ball.vx > 1.7);
-    if (!toward) return;
-
-    const nearGoal = isLeft ? (ball.x < W*0.36) : (ball.x > W*0.64);
-    if (!nearGoal) return;
-
-    const b = isLeft ? goalieBoundsLeft(gk) : goalieBoundsRight(gk);
-
-    // prediction breve
-    const look = 8 + cfg.predict*22;
-    let py = ball.y + ball.vy * look;
-
-    // stile: aggressivo tende a tuffarsi più spesso e più "verso la palla"
-    py = lerp(H/2, py, 0.75 + 0.10*Math.max(0, gk.ai.styleBias));
-    py = clamp(py, b.minY, b.maxY);
-
-    // chance dive (moderata, non OP)
-    const baseChance = (difficulty === "easy" ? 0.16 : difficulty === "hard" ? 0.14 : 0.15);
-    const chance = clamp(baseChance * gk.ai.diveChance * (1.0 + 0.12*Math.max(0, gk.ai.styleBias)), 0.06, 0.28);
-
-    if (Math.random() < chance) {
-      gk.diveT = DIVE_TIME;
-      gk.diveCd = rand(DIVE_COOLDOWN_MIN, DIVE_COOLDOWN_MAX);
-      gk.diveY = py;
-      gk.diveUsed = true;
-    }
-  }
-
-  function applyDiveMovement(cfg, gk, tx, ty, diveMul){
-    const s = cfg.goalieSpeed * (0.92 + 0.10*(gk.ai.speedMul-1)) * diveMul;
-    gk.x += clamp(tx - gk.x, -s, s);
-    gk.y += clamp(ty - gk.y, -s, s);
-  }
-
-  // ---------------- Goalies update (NORMAL MATCH) ----------------
-  function updateGoalies(dt){
-    const cfg = (gameMode === "bot") ? (DIFF[difficulty] || DIFF.medium) : DIFF.medium;
-
-    GK_L.mistakeT = Math.max(0, GK_L.mistakeT - dt);
-    GK_R.mistakeT = Math.max(0, GK_R.mistakeT - dt);
-    GK_L.reactT = Math.max(0, GK_L.reactT - dt);
-    GK_R.reactT = Math.max(0, GK_R.reactT - dt);
-
-    maybeTriggerGKBrain(dt, cfg, GK_L);
-    maybeTriggerGKBrain(dt, cfg, GK_R);
-
-    // dives
-    maybeTriggerDiveNormal(dt, cfg, GK_L, true);
-    maybeTriggerDiveNormal(dt, cfg, GK_R, false);
-
-    const bL = goalieBoundsLeft(GK_L);
-    const bR = goalieBoundsRight(GK_R);
-
-    // base tracking (non perfetto)
-    const slackL = GK_L.ai.aimSlack;
-    const slackR = GK_R.ai.aimSlack;
-
-    let tLX = clamp(ball.x, bL.minX, bL.maxX);
-    let tLY = clamp(ball.y, bL.minY, bL.maxY);
-    tLX = lerp(bL.minX + 22, tLX, 0.48);
-    tLY = lerp(H/2, tLY, 0.60);
-
-    let tRX = clamp(ball.x, bR.minX, bR.maxX);
-    let tRY = clamp(ball.y, bR.minY, bR.maxY);
-    tRX = lerp(bR.maxX - 22, tRX, 0.48);
-    tRY = lerp(H/2, tRY, 0.60);
-
-    if (GK_L.mistakeT > 0) {
-      tLY = clamp(tLY + (Math.random()-0.5)*90*slackL, bL.minY, bL.maxY);
-      tLX = clamp(tLX + (Math.random()-0.5)*55*slackL, bL.minX, bL.maxX);
-    }
-    if (GK_R.mistakeT > 0) {
-      tRY = clamp(tRY + (Math.random()-0.5)*90*slackR, bR.minY, bR.maxY);
-      tRX = clamp(tRX + (Math.random()-0.5)*55*slackR, bR.minX, bR.maxX);
+    // react delay: sometimes freeze
+    if (gk.reactT > 0) {
+      updateGoalieDiveStripe(dt, gk);
+      return;
     }
 
-    if (GK_L.reactT > 0) { tLX = GK_L.x; tLY = GK_L.y; }
-    if (GK_R.reactT > 0) { tRX = GK_R.x; tRY = GK_R.y; }
+    const goalX = gk.isLeft ? 0 : W;
 
-    // if diving, override Y target partially (tuffo)
-    if (GK_L.diveT > 0) tLY = lerp(tLY, GK_L.diveY, 0.85);
-    if (GK_R.diveT > 0) tRY = lerp(tRY, GK_R.diveY, 0.85);
+    // 'smart' target:
+    // - if ball toward you: aim predicted crossing near goal line
+    // - else: return closer to center of box
+    const toward = gk.isLeft ? (ball.vx < -0.5) : (ball.vx > 0.5);
+    const veryToward = gk.isLeft ? (ball.vx < -1.2) : (ball.vx > 1.2);
 
-    // dive multiplier: short burst, not too much
-    const diveMulL = (GK_L.diveT > 0) ? (1.55 * GK_L.ai.divePower) : (0.98 * GK_L.ai.speedMul);
-    const diveMulR = (GK_R.diveT > 0) ? (1.55 * GK_R.ai.divePower) : (0.98 * GK_R.ai.speedMul);
+    let tx = gk.isLeft ? (b.minX + 20) : (b.maxX - 20);
+    let ty = H/2;
 
-    applyDiveMovement(cfg, GK_L, tLX, tLY, diveMulL);
-    applyDiveMovement(cfg, GK_R, tRX, tRY, diveMulR);
+    if (toward) {
+      const predY = predictBallYAtX(goalX);
+      // clamp inside box and inside goal-mouth-ish
+      ty = clamp(predY, b.minY, b.maxY);
 
-    GK_L.x = clamp(GK_L.x, bL.minX, bL.maxX);
-    GK_L.y = clamp(GK_L.y, bL.minY, bL.maxY);
-    GK_R.x = clamp(GK_R.x, bR.minX, bR.maxX);
-    GK_R.y = clamp(GK_R.y, bR.minY, bR.maxY);
+      // slight "smart" tracking to ball too (not only intercept)
+      const mixBall = clamp(0.28 + 0.15*cfg.gkDiveAggro, 0.25, 0.55);
+      ty = lerp(ty, clamp(ball.y, b.minY, b.maxY), mixBall);
+    } else {
+      // when ball far: go home but still follow a bit
+      ty = lerp(H/2, clamp(ball.y, b.minY, b.maxY), 0.18 + 0.10*Math.max(0,gk.ai.style));
+    }
+
+    // mistakes: jitter
+    if (gk.mistakeT > 0) {
+      const jitter = (Math.random()-0.5) * (70 * gk.ai.slack);
+      ty = clamp(ty + jitter, b.minY, b.maxY);
+    }
+
+    // decide dive
+    if (veryToward && shouldDiveAtGoal(gk, cfg)) {
+      // dive to predicted intercept or slightly offset (human)
+      let diveY = ty;
+      if (Math.random() < (0.12 * gk.ai.mistakeMul)) {
+        diveY = clamp(diveY + (Math.random()<0.5?-1:1) * (45 + Math.random()*55), b.minY, b.maxY);
+      }
+      startDive(gk, diveY);
+    }
+
+    // if diving: big Y burst toward diveY
+    if (gk.diveT > 0) {
+      const s = cfg.gkBaseSpeed * gk.ai.speedMul * DIVE_BURST;
+      gk.y += clamp(gk.diveY - gk.y, -s, s);
+      // keep a bit of X stability
+      const xHome = gk.isLeft ? (b.minX + 20) : (b.maxX - 20);
+      gk.x += clamp(xHome - gk.x, -s*0.6, s*0.6);
+    } else {
+      // normal movement: decent but not OP
+      const s = cfg.gkBaseSpeed * gk.ai.speedMul;
+      gk.x += clamp(tx - gk.x, -s, s);
+      gk.y += clamp(ty - gk.y, -s, s);
+    }
+
+    gk.x = clamp(gk.x, b.minX, b.maxX);
+    gk.y = clamp(gk.y, b.minY, b.maxY);
+
+    updateGoalieDiveStripe(dt, gk);
   }
 
-  // ---------------- Bot AI ----------------
+  function updateGoalkeepers(dt){
+    const cfg = (DIFF[difficulty] || DIFF.medium);
+
+    // in penalties: only one GK is active (defender)
+    if (pen.active) return;
+
+    updateGoalieNormal(dt, cfg, GK_L);
+    updateGoalieNormal(dt, cfg, GK_R);
+  }
+
+  // ---------------- Bot AI (opponent player) ----------------
   function updateBot(dt){
     const cfg = DIFF[difficulty] || DIFF.medium;
+
     const t = cfg.predict;
     const px = ball.x + ball.vx * (t * 60);
     const py = ball.y + ball.vy * (t * 60);
 
     const danger = (ball.x > W*0.72) || (ball.vx > 0 && ball.x > W*0.60);
     let tx, ty;
+
     const noise = (Math.random() < cfg.error) ? (Math.random()-0.5)*120 : 0;
 
     if (danger) {
@@ -756,7 +858,7 @@
 
     const close = dist(P2.x,P2.y,ball.x,ball.y) < (P2.r + ball.r + 12);
     if (close) {
-      const aimX = danger ? W * 0.55 : 0;
+      const aimX = danger ? W * 0.47 : 0;
       const aimY = H/2 + (Math.random()-0.5) * 120 * cfg.error;
 
       const adx = aimX - ball.x;
@@ -765,15 +867,18 @@
 
       ball.vx = (adx/ad) * cfg.botKick;
       ball.vy = (ady/ad) * cfg.botKick;
+
       clampBallSpeed();
     }
   }
 
-  // ---------------- Goals ----------------
+  // ---------------- Goals & scoring ----------------
   function checkGoals(){
+    // ball left out of bounds through goal mouth => goal for right
     if (ball.x + ball.r < -2 && ball.y >= goalL.y1 && ball.y <= goalL.y2){
       scoreRight++; setScoreUI(); goalMoment("GOAL!");
     }
+    // ball right out of bounds through goal mouth => goal for left
     if (ball.x - ball.r > W + 2 && ball.y >= goalR.y1 && ball.y <= goalR.y2){
       scoreLeft++; setScoreUI(); goalMoment("GOAL!");
     }
@@ -786,10 +891,10 @@
       setOverlay("", false);
       resetRound();
       startCountdown(2);
-    }, 600);
+    }, 650);
   }
 
-  // ---------------- Penalties ----------------
+  // ---------------- Penalties (shootout) ----------------
   function startPenalties(){
     pen.active = true;
     pen.leftTaken = 0; pen.rightTaken = 0;
@@ -808,95 +913,88 @@
     setTimeout(() => {
       setOverlay("", false);
       setupNextPenaltyShot();
-    }, 800);
-  }
-
-  function setupNextPenaltyShot(){
-    pen.shotLive = false;
-    pen.shotTimer = 0;
-    pen.uiLock = 0.40;
-
-    ball.vx = 0; ball.vy = 0;
-    ball.trail = [];
-    ball.bounceCd = 0;
-
-    GK_L.mistakeT = GK_L.reactT = 0;
-    GK_R.mistakeT = GK_R.reactT = 0;
-
-    GK_L.diveT = 0; GK_L.diveCd = 0; GK_L.diveUsed=false;
-    GK_R.diveT = 0; GK_R.diveCd = 0; GK_R.diveUsed=false;
-
-    GK_L.pen.planX = GK_L.pen.planY = null; GK_L.pen.react = 0;
-    GK_R.pen.planX = GK_R.pen.planY = null; GK_R.pen.react = 0;
-
-    const spotOffset = 350;
-    const kickerOffset = 165;
-
-    if (pen.turn === "left") {
-      const bx = W - spotOffset;
-      const by = H/2;
-
-      ball.x = bx; ball.y = by;
-      P1.x = bx - kickerOffset; P1.y = by;
-      P2.x = bx - 300; P2.y = by;
-
-      GK_R.x = W - 78; GK_R.y = H/2;
-      GK_L.x = 78; GK_L.y = H/2;
-
-      setOverlay(`${P1.name.toUpperCase()} KICKS`, true);
-    } else {
-      const bx = spotOffset;
-      const by = H/2;
-
-      ball.x = bx; ball.y = by;
-      P2.x = bx + kickerOffset; P2.y = by;
-      P1.x = bx + 300; P1.y = by;
-
-      GK_L.x = 78; GK_L.y = H/2;
-      GK_R.x = W - 78; GK_R.y = H/2;
-
-      setOverlay(`${P2.name.toUpperCase()} KICKS`, true);
-    }
-
-    renderPenaltyDots();
-    setTimeout(() => setOverlay("", false), 650);
+    }, 850);
   }
 
   function penaltyKicker(){ return (pen.turn === "left") ? P1 : P2; }
   function penaltyGoalie(){ return (pen.turn === "left") ? GK_R : GK_L; }
   function penaltyGoal(){ return (pen.turn === "left") ? goalR : goalL; }
 
-  function planPenaltySave(goalie, cfg){
-    const b = (goalie === GK_L) ? goalieBoundsLeft(goalie) : goalieBoundsRight(goalie);
+  function setupNextPenaltyShot(){
+    pen.shotLive = false;
+    pen.shotTimer = 0;
+    pen.uiLock = 0.42;
 
-    const predY = clamp(ball.y + ball.vy * 18, b.minY, b.maxY);
-    const predX = clamp(ball.x + ball.vx * 12, b.minX, b.maxX);
+    ball.vx = 0; ball.vy = 0;
+    ball.trail = [];
+    ball.bounceCd = 0;
 
-    // non impossibile segnare: porta grande + gk umano
-    const mistakeChance = clamp(cfg.gkMistake * goalie.ai.mistakeMul * 2.1, 0, 0.62);
+    resetGoalieState(GK_L);
+    resetGoalieState(GK_R);
 
-    let planY = predY;
-    let planX = predX;
+    // spawn farther
+    const spotOffset = 360;
+    const kickerOffset = 175;
 
-    if (Math.random() < mistakeChance) {
-      const off = (Math.random()<0.5?-1:1) * (95 + Math.random()*115);
-      planY = clamp(predY + off, b.minY, b.maxY);
-      planX = clamp(predX + (Math.random()-0.5)*80, b.minX, b.maxX);
+    const goalie = penaltyGoalie();
+    const g = penaltyGoal();
+
+    // goalie starts centered
+    goalie.x = goalie.isLeft ? 84 : W-84;
+    goalie.y = H/2;
+
+    if (pen.turn === "left") {
+      ball.x = W - spotOffset; ball.y = H/2;
+      P1.x = ball.x - kickerOffset; P1.y = ball.y;
+      P2.x = ball.x - 320; P2.y = ball.y;
+      setOverlay(`${P1.name.toUpperCase()} KICKS`, true);
     } else {
-      planY = clamp(predY + (Math.random()-0.5)*65*goalie.ai.aimSlack, b.minY, b.maxY);
-      planX = clamp(predX + (Math.random()-0.5)*45*goalie.ai.aimSlack, b.minX, b.maxX);
+      ball.x = spotOffset; ball.y = H/2;
+      P2.x = ball.x + kickerOffset; P2.y = ball.y;
+      P1.x = ball.x + 320; P1.y = ball.y;
+      setOverlay(`${P2.name.toUpperCase()} KICKS`, true);
+    }
+
+    // goalie pre-plan (CAN BE WRONG)
+    planPenaltyGoalie(goalie, DIFF[difficulty] || DIFF.medium, g);
+
+    renderPenaltyDots();
+    setTimeout(() => setOverlay("", false), 650);
+  }
+
+  function planPenaltyGoalie(goalie, cfg, g){
+    const b = goalieBounds(goalie);
+
+    // where would a "perfect" body want to go?
+    const centerY = (g.y1 + g.y2) / 2;
+    let planY = clamp(centerY, b.minY, b.maxY);
+
+    // decide if goalie commits or waits (human)
+    goalie.pen.committed = (Math.random() < goalie.ai.penCommit);
+
+    // wrong-side guess chance based on difficulty + personality
+    const wrong = (Math.random() < goalie.ai.penWrong);
+
+    // if committed, pick a side (left/right of goal mouth)
+    const side = (Math.random() < 0.5) ? -1 : 1;
+    const offset = (55 + Math.random()*70) * side;
+
+    if (goalie.pen.committed) {
+      // choose a dy target
+      planY = clamp(centerY + (wrong ? -offset : offset), b.minY, b.maxY);
+      // sometimes even more wrong (fun)
+      if (wrong && Math.random() < 0.35) planY = clamp(planY + (Math.random()<0.5?-1:1)*70, b.minY, b.maxY);
+    } else {
+      // not committed: still can be sloppy
+      planY = clamp(centerY + (Math.random()-0.5)*60*goalie.ai.slack, b.minY, b.maxY);
     }
 
     goalie.pen.planY = planY;
-    goalie.pen.planX = planX;
+    goalie.pen.planX = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
 
-    // reaction delay + diverge per GK
-    const reactBase = 0.18;
-    const reactJit  = 0.24;
-    goalie.pen.react = (reactBase + Math.random()*reactJit) * goalie.ai.reactMul;
-
-    // decide se farà un tuffo secco verso planY (chance per GK)
-    goalie.diveUsed = false;
+    // reaction delay (human)
+    const reactBase = cfg.gkReact * goalie.ai.reactMul;
+    goalie.pen.react = clamp(reactBase + Math.random()*0.22, 0.06, 0.45);
   }
 
   function tryTriggerPenaltyShot(){
@@ -904,130 +1002,149 @@
 
     const kicker = penaltyKicker();
     const d = dist(kicker.x, kicker.y, ball.x, ball.y);
-    if (d < kicker.r + ball.r + 8) {
-      pen.shotLive = true;
-      pen.shotTimer = 0;
+    if (d >= kicker.r + ball.r + 8) return;
 
-      const cfg = (gameMode === "bot") ? (DIFF[difficulty] || DIFF.medium) : DIFF.medium;
-      const g = penaltyGoal();
-      const goalCenterY = (g.y1 + g.y2) / 2;
-      const goalX = g.x;
+    pen.shotLive = true;
+    pen.shotTimer = 0;
 
-      let ax = goalX - ball.x;
-      let ay = goalCenterY - ball.y;
+    const cfg = (DIFF[difficulty] || DIFF.medium);
+    const g = penaltyGoal();
+    const goalCenterY = (g.y1 + g.y2) / 2;
+    const goalX = g.x;
 
-      ax += kicker.lastDirX * 185;
-      ay += kicker.lastDirY * 185;
+    // aim by approach angle, plus small randomness
+    let ax = goalX - ball.x;
+    let ay = goalCenterY - ball.y;
 
-      const botKicker = (gameMode === "bot" && kicker === P2);
-      const spread = botKicker ? cfg.error : 0.08;
-      ay += (Math.random() - 0.5) * 190 * spread;
+    ax += kicker.lastDirX * 190;
+    ay += kicker.lastDirY * 190;
 
-      const ad = Math.hypot(ax, ay) || 1;
-      ax /= ad; ay /= ad;
+    const botKicker = (gameMode === "bot" && kicker === P2);
+    const spread = botKicker ? cfg.error : 0.10;
+    ay += (Math.random()-0.5) * 210 * spread;
 
-      const power = botKicker ? (cfg.botKick + 2.2) : 13.8;
-      ball.vx = ax * power;
-      ball.vy = ay * power;
-      clampBallSpeed();
+    const ad = Math.hypot(ax,ay) || 1;
+    ax /= ad; ay /= ad;
 
-      const goalie = penaltyGoalie();
-      planPenaltySave(goalie, cfg);
+    const power = botKicker ? (cfg.botKick + 2.0) : 13.8;
+    ball.vx = ax * power;
+    ball.vy = ay * power;
+    clampBallSpeed();
+
+    // goalie also may decide to dive once shot starts
+    const goalie = penaltyGoalie();
+    if (goalie.pen.committed) {
+      // commit dive to planY
+      startDive(goalie, goalie.pen.planY ?? H/2);
     }
   }
 
   function updatePenaltyGoalie(dt){
-    const cfg = (gameMode === "bot") ? (DIFF[difficulty] || DIFF.medium) : DIFF.medium;
+    const cfg = (DIFF[difficulty] || DIFF.medium);
     const goalie = penaltyGoalie();
-    const b = (goalie === GK_L) ? goalieBoundsLeft(goalie) : goalieBoundsRight(goalie);
+    const b = goalieBounds(goalie);
 
-    // pre-shot: torna centro
-    if (!pen.shotLive) {
-      const tx = (goalie === GK_L) ? (b.minX + 25) : (b.maxX - 25);
-      const ty = H/2;
-
-      goalie.diveCd = Math.max(0, goalie.diveCd - dt);
-      goalie.diveT  = Math.max(0, goalie.diveT - dt);
-
-      const s = cfg.goalieSpeed * 0.72 * goalie.ai.speedMul;
-      goalie.x += clamp(tx - goalie.x, -s, s);
-      goalie.y += clamp(ty - goalie.y, -s, s);
-      goalie.x = clamp(goalie.x, b.minX, b.maxX);
-      goalie.y = clamp(goalie.y, b.minY, b.maxY);
-      return;
-    }
-
-    // during shot: reaction delay
-    goalie.pen.react = Math.max(0, goalie.pen.react - dt);
-    if (goalie.pen.react > 0) return;
-
-    // dive trigger once (not always)
+    // cooldown/dive
     goalie.diveCd = Math.max(0, goalie.diveCd - dt);
     goalie.diveT  = Math.max(0, goalie.diveT  - dt);
 
-    if (!goalie.diveUsed && goalie.diveCd <= 0) {
-      const base = (difficulty === "easy" ? 0.20 : difficulty === "hard" ? 0.18 : 0.19);
-      const chance = clamp(base * goalie.ai.diveChance, 0.10, 0.34);
-      if (Math.random() < chance) {
-        goalie.diveUsed = true;
-        goalie.diveT = DIVE_TIME;
-        goalie.diveCd = rand(DIVE_COOLDOWN_MIN, DIVE_COOLDOWN_MAX);
-        goalie.diveY = clamp(goalie.pen.planY ?? H/2, b.minY, b.maxY);
+    // pre-shot: stay centered-ish
+    if (!pen.shotLive) {
+      const tx = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
+      const ty = lerp(H/2, goalie.pen.planY ?? H/2, goalie.pen.committed ? 0.20 : 0.08);
+
+      const s = (cfg.gkBaseSpeed * goalie.ai.speedMul) * 0.70;
+      goalie.x += clamp(tx - goalie.x, -s, s);
+      goalie.y += clamp(ty - goalie.y, -s, s);
+
+      goalie.x = clamp(goalie.x, b.minX, b.maxX);
+      goalie.y = clamp(goalie.y, b.minY, b.maxY);
+
+      updateGoalieDiveStripe(dt, goalie);
+      return;
+    }
+
+    goalie.pen.react = Math.max(0, goalie.pen.react - dt);
+    if (goalie.pen.react > 0) {
+      updateGoalieDiveStripe(dt, goalie);
+      return;
+    }
+
+    // during shot: either track or commit
+    let tx = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
+    let ty;
+
+    if (goalie.pen.committed) {
+      ty = goalie.diveT > 0 ? goalie.diveY : (goalie.pen.planY ?? H/2);
+      // if not already diving, start a late dive sometimes
+      if (goalie.diveT <= 0 && Math.random() < 0.20) startDive(goalie, ty);
+    } else {
+      // tracking: predict approx at goal line
+      const goalX = goalie.isLeft ? 0 : W;
+      let predY = predictBallYAtX(goalX);
+      predY = clamp(predY, b.minY, b.maxY);
+      // human looseness
+      predY = clamp(predY + (Math.random()-0.5)*55*goalie.ai.slack*(cfg.gkMistake*5.2), b.minY, b.maxY);
+      ty = predY;
+
+      // occasional dive even without commit
+      if (goalie.diveT <= 0 && goalie.diveCd <= 0 && getBallSpeed() > 6.0 && Math.random() < 0.18*cfg.gkDiveAggro) {
+        startDive(goalie, ty);
       }
     }
 
-    // follow plan (can be wrong), if diving -> lock more to diveY
-    let tx = goalie.pen.planX ?? clamp(ball.x, b.minX, b.maxX);
-    let ty = goalie.pen.planY ?? clamp(ball.y, b.minY, b.maxY);
-
-    if (goalie.diveT > 0) ty = lerp(ty, goalie.diveY, 0.92);
-
-    if (goalie === GK_L) tx = lerp(b.minX + 16, tx, 0.72);
-    else tx = lerp(b.maxX - 16, tx, 0.72);
-
-    const diveMul = goalie.diveT > 0 ? (1.70 * goalie.ai.divePower) : (1.05 * goalie.ai.speedMul);
-    const s = cfg.goalieSpeed * 0.78 * diveMul;
-
-    goalie.x += clamp(tx - goalie.x, -s, s);
-    goalie.y += clamp(ty - goalie.y, -s, s);
+    // movement
+    if (goalie.diveT > 0) {
+      const s = cfg.gkBaseSpeed * goalie.ai.speedMul * (DIVE_BURST * 1.12);
+      goalie.y += clamp(ty - goalie.y, -s, s);
+      goalie.x += clamp(tx - goalie.x, -s*0.55, s*0.55);
+    } else {
+      const s = cfg.gkBaseSpeed * goalie.ai.speedMul * 0.95;
+      goalie.x += clamp(tx - goalie.x, -s, s);
+      goalie.y += clamp(ty - goalie.y, -s, s);
+    }
 
     goalie.x = clamp(goalie.x, b.minX, b.maxX);
     goalie.y = clamp(goalie.y, b.minY, b.maxY);
 
-    resolveBallCircle(goalie, 9.4);
+    updateGoalieDiveStripe(dt, goalie);
+
+    // save collision (stronger but not OP)
+    resolveBallCircle(goalie, 11.2);
   }
 
   function updatePenalties(dt){
     pen.uiLock = Math.max(0, pen.uiLock - dt);
+
     tryTriggerPenaltyShot();
     updatePenaltyGoalie(dt);
 
-    if (pen.shotLive) {
-      pen.shotTimer += dt;
+    if (!pen.shotLive) return;
 
-      ball.x += ball.vx;
-      ball.y += ball.vy;
-      ball.vx *= 0.992;
-      ball.vy *= 0.992;
+    pen.shotTimer += dt;
 
-      ball.trail.push({x:ball.x,y:ball.y});
-      if (ball.trail.length > 16) ball.trail.shift();
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    ball.vx *= 0.992;
+    ball.vy *= 0.992;
 
-      ballWalls();
-      for (const p of goalL.posts) resolvePost(p);
-      for (const p of goalR.posts) resolvePost(p);
+    ball.trail.push({x:ball.x,y:ball.y});
+    if (ball.trail.length > 16) ball.trail.shift();
 
-      const g = penaltyGoal();
-      const goalScored =
-        (g === goalR && (ball.x - ball.r > W + 2) && ball.y >= g.y1 && ball.y <= g.y2) ||
-        (g === goalL && (ball.x + ball.r < -2) && ball.y >= g.y1 && ball.y <= g.y2);
+    ballWalls();
+    for (const p of goalL.posts) resolvePost(p);
+    for (const p of goalR.posts) resolvePost(p);
 
-      const slow = Math.hypot(ball.vx, ball.vy) < 0.35;
-      const timeout = pen.shotTimer > 4.1;
+    const g = penaltyGoal();
+    const goalScored =
+      (g === goalR && (ball.x - ball.r > W + 2) && ball.y >= g.y1 && ball.y <= g.y2) ||
+      (g === goalL && (ball.x + ball.r < -2) && ball.y >= g.y1 && ball.y <= g.y2);
 
-      if (goalScored) { setOverlay("GOAL!", true); finishPenaltyShot(true); }
-      else if (slow || timeout) { setOverlay("MISS!", true); finishPenaltyShot(false); }
-    }
+    const slow = getBallSpeed() < 0.35;
+    const timeout = pen.shotTimer > 4.2;
+
+    if (goalScored) { setOverlay("GOAL!", true); finishPenaltyShot(true); }
+    else if (slow || timeout) { setOverlay("MISS!", true); finishPenaltyShot(false); }
   }
 
   function canEarlyFinishShootout(){
@@ -1071,10 +1188,12 @@
     renderPenaltyDots();
 
     const winnerName = (winnerSide === "left") ? P1.name : P2.name;
+
     resultModal.style.display = "flex";
     resultTitle.textContent = "Match Over (Penalties)";
     resultScore.textContent = `${scoreLeft} - ${scoreRight}`;
     resultLine.textContent = `Winner: ${winnerName} • Penalties: ${pen.leftGoals}-${pen.rightGoals}`;
+
     pausedByMenu = true;
   }
 
@@ -1098,6 +1217,57 @@
     resultLine.textContent = `Winner: ${(scoreLeft > scoreRight) ? P1.name : P2.name}`;
   }
 
+  // ---------------- Main gameplay update ----------------
+  function updateBall(dt){
+    ball.bounceCd = Math.max(0, ball.bounceCd - dt);
+
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    ball.vx *= 0.992;
+    ball.vy *= 0.992;
+
+    ball.trail.push({x:ball.x,y:ball.y});
+    if (ball.trail.length > 16) ball.trail.shift();
+
+    ballWalls();
+    for (const p of goalL.posts) resolvePost(p);
+    for (const p of goalR.posts) resolvePost(p);
+  }
+
+  function updatePlayers(dt){
+    const i1 = getP1Input();
+    const i2 = getP2Input();
+
+    rememberDirs(P1, i1.mx, i1.my);
+    P1.x += i1.mx * P1.speed;
+    P1.y += i1.my * P1.speed;
+
+    P1.x = clamp(P1.x, P1.r+6, W-P1.r-6);
+    P1.y = clamp(P1.y, P1.r+6, H-P1.r-6);
+
+    if (gameMode === "2p") {
+      rememberDirs(P2, i2.mx, i2.my);
+      P2.x += i2.mx * P2.speed;
+      P2.y += i2.my * P2.speed;
+
+      P2.x = clamp(P2.x, P2.r+6, W-P2.r-6);
+      P2.y = clamp(P2.y, P2.r+6, H-P2.r-6);
+    } else {
+      updateBot(dt);
+    }
+  }
+
+  function doCollisions(){
+    // player kicks strong
+    resolveBallCircle(P1, 13.4);
+    resolveBallCircle(P2, (gameMode === "bot") ? (DIFF[difficulty]?.botKick || 12) : 13.4);
+
+    // goalies: solid saves but not always
+    resolveBallCircle(GK_L, 11.2);
+    resolveBallCircle(GK_R, 11.2);
+  }
+
   // ---------------- MAIN LOOP ----------------
   let lastT = 0;
   function loop(t){
@@ -1106,9 +1276,6 @@
     lastT = t;
 
     if (!pausedByMenu) {
-      // cooldown bounce
-      ball.bounceCd = Math.max(0, ball.bounceCd - dt);
-
       if (!inCountdown && !pen.active) {
         remaining = Math.max(0, remaining - dt);
         setTimeUI();
@@ -1118,71 +1285,38 @@
       }
 
       if (!inCountdown) {
-        const i1 = getP1Input();
-        const i2 = getP2Input();
-
         if (pen.active) {
-          const kicker = (pen.turn === "left") ? P1 : P2;
-          const inp = (kicker === P1) ? i1 : i2;
+          // only kicker moves freely in penalties (feels clean)
+          const kicker = penaltyKicker();
+          const inp = (kicker === P1) ? getP1Input() : getP2Input();
           rememberDirs(kicker, inp.mx, inp.my);
 
           kicker.x += inp.mx * kicker.speed;
           kicker.y += inp.my * kicker.speed;
+
           kicker.x = clamp(kicker.x, kicker.r+6, W-kicker.r-6);
           kicker.y = clamp(kicker.y, kicker.r+6, H-kicker.r-6);
 
           updatePenalties(dt);
         } else {
-          rememberDirs(P1, i1.mx, i1.my);
-          P1.x += i1.mx * P1.speed;
-          P1.y += i1.my * P1.speed;
-          P1.x = clamp(P1.x, P1.r+6, W-P1.r-6);
-          P1.y = clamp(P1.y, P1.r+6, H-P1.r-6);
-
-          if (gameMode === "2p") {
-            rememberDirs(P2, i2.mx, i2.my);
-            P2.x += i2.mx * P2.speed;
-            P2.y += i2.my * P2.speed;
-            P2.x = clamp(P2.x, P2.r+6, W-P2.r-6);
-            P2.y = clamp(P2.y, P2.r+6, H-P2.r-6);
-          } else {
-            updateBot(dt);
-          }
-
-          updateGoalies(dt);
-
-          // ball physics
-          ball.x += ball.vx;
-          ball.y += ball.vy;
-          ball.vx *= 0.992;
-          ball.vy *= 0.992;
-
-          ball.trail.push({x:ball.x,y:ball.y});
-          if (ball.trail.length > 16) ball.trail.shift();
-
-          ballWalls();
-          for (const p of goalL.posts) resolvePost(p);
-          for (const p of goalR.posts) resolvePost(p);
-
-          // collisions: players stronger, GK medium
-          resolveBallCircle(P1, 13.2);
-          resolveBallCircle(P2, (gameMode === "bot") ? (DIFF[difficulty]?.botKick || 12) : 13.2);
-          resolveBallCircle(GK_L, 10.0);
-          resolveBallCircle(GK_R, 10.0);
-
+          updatePlayers(dt);
+          updateGoalkeepers(dt);
+          updateBall(dt);
+          doCollisions();
           checkGoals();
         }
       }
 
+      // draw
       drawField();
-      drawTrail();
+      drawBallTrail();
       drawEntities();
     }
 
     requestAnimationFrame(loop);
   }
 
-  // ---------------- UI behavior ----------------
+  // ---------------- UI & start ----------------
   function refreshMenuVisibility(){
     const mode = modeSelect.value;
     if (mode === "bot") { p2NameWrap.style.display = "none"; diffWrap.style.display = "block"; }
@@ -1284,7 +1418,7 @@
   homeBtn.addEventListener("click", goHome);
   homeBtn2.addEventListener("click", goHome);
 
-  // ---------------- Init ----------------
+  // ---------------- init hidden ----------------
   canvas.style.display = "none";
   hud.style.display = "none";
   resultModal.style.display = "none";

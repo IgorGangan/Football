@@ -1,3 +1,4 @@
+/* game.js */
 (() => {
   // ---------------- Safe DOM helpers ----------------
   const $ = (id) => document.getElementById(id);
@@ -87,12 +88,6 @@
   })();
 
   // ---------------- Difficulty configs (NERF GK) ----------------
-  // Portieri NON OP:
-  // - meno velocità
-  // - più errori
-  // - dive meno frequente
-  // - reaction umana
-  // - rigori più “50/50”
   const DIFF = {
     easy: {
       botSpeed: 2.9, botKick: 9.5,  error: 0.30, predict: 0.18,
@@ -110,11 +105,11 @@
 
   // ---------------- Sizes ----------------
   const PLAYER_R = 26;
-  const GOALIE_R = 18;         // richiesto
+  const GOALIE_R = 18;
   const BALL_R   = 11;
 
   // ---------------- Field / goal ----------------
-  const goalHalf = 128;        // leggermente più grande per segnare meglio
+  const goalHalf = 128;
   const postR = 10;
   const goalL = { x: 0, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:0,y:H/2-goalHalf},{x:0,y:H/2+goalHalf}] };
   const goalR = { x: W, y1: H/2-goalHalf, y2: H/2+goalHalf, posts: [{x:W,y:H/2-goalHalf},{x:W,y:H/2+goalHalf}] };
@@ -132,8 +127,8 @@
   const DIVE_TIME = 0.16;
   const DIVE_COOLDOWN_MIN = 0.85;
   const DIVE_COOLDOWN_MAX = 1.45;
-  const DIVE_BURST = 1.45;      // più basso = meno OP
-  const DIVE_RECOVERY = 0.13;   // dopo tuffo: micro “stun” così può sbagliare
+  const DIVE_BURST = 1.45;
+  const DIVE_RECOVERY = 0.13;
 
   // ---------------- Game state ----------------
   let running = false;
@@ -193,7 +188,7 @@
         aggro: 1,
         penWrong: 0.33,
         penCommit: 0.62,
-        style: 0, // - safe, + aggressive
+        style: 0,
       },
       pen: { planY:null, planX:null, react:0, committed:false },
     };
@@ -376,9 +371,8 @@
     const cfg = DIFF[difficulty] || DIFF.medium;
 
     function roll(gk){
-      const style = rand(-1, 1); // - safe, + aggressive
+      const style = rand(-1, 1);
 
-      // Nerf: range più umana
       const speedMul   = rand(0.88, 1.06);
       const reactMul   = rand(0.92, 1.18);
       const mistakeMul = rand(0.95, 1.40);
@@ -447,7 +441,7 @@
     ball.y += ny * overlap;
 
     const cur = getBallSpeed();
-    const s = kickStrength + cur * 0.16; // leggermente meno “sparata infinita”
+    const s = kickStrength + cur * 0.16;
     ball.vx = nx * s;
     ball.vy = ny * s;
 
@@ -660,7 +654,6 @@
     gk.diveY = clamp(yTarget, b.minY, b.maxY);
     gk.recoveryT = DIVE_RECOVERY;
 
-    // stripe
     gk.diveTrail.push({x:gk.x, y:gk.y});
     if (gk.diveTrail.length > 24) gk.diveTrail.shift();
   }
@@ -670,7 +663,6 @@
       gk.diveTrail.push({x:gk.x, y:gk.y});
       if (gk.diveTrail.length > 26) gk.diveTrail.shift();
     } else {
-      // fade out
       if (gk.diveTrail.length && Math.random() < 0.30) gk.diveTrail.shift();
     }
   }
@@ -702,7 +694,6 @@
     const py = predictBallYAtX(goalX);
     const inMouth = (py >= (H/2 - goalHalf - 25) && py <= (H/2 + goalHalf + 25));
 
-    // nerf: chance più bassa
     const base = 0.10 + 0.12*(cfg.gkDiveAggro - 0.55);
     const styleBoost = 0.05*Math.max(0, gk.ai.style);
     const mouthBoost = inMouth ? 0.06 : 0.0;
@@ -718,13 +709,11 @@
 
     maybeHumanTimers(dt, cfg, gk);
 
-    // if reacting late: freeze (human)
     if (gk.reactT > 0) {
       updateDiveStripe(gk);
       return;
     }
 
-    // if just finished diving: small recovery makes mistakes possible
     const speedFactor = (gk.recoveryT > 0) ? 0.72 : 1.0;
 
     const goalX = gk.isLeft ? 0 : W;
@@ -738,7 +727,6 @@
       let predY = predictBallYAtX(goalX);
       predY = clamp(predY, b.minY, b.maxY);
 
-      // nerf: non segue perfetto, mix con palla e "bias" verso centro
       const follow = 0.32;
       ty = lerp(predY, clamp(ball.y, b.minY, b.maxY), follow);
       ty = lerp(H/2, ty, 0.78);
@@ -746,29 +734,23 @@
       ty = lerp(H/2, clamp(ball.y, b.minY, b.maxY), 0.16);
     }
 
-    // mistakes
     if (gk.mistakeT > 0) {
       ty = clamp(ty + (Math.random()-0.5) * (85 * gk.ai.slack), b.minY, b.maxY);
     }
 
-    // decide dive
     if (veryToward && shouldDive(gk, cfg)) {
       let diveY = ty;
-
-      // human wrong dive offset sometimes
       if (Math.random() < (0.14 * gk.ai.mistakeMul)) {
         diveY = clamp(diveY + (Math.random()<0.5?-1:1) * (55 + Math.random()*65), b.minY, b.maxY);
       }
       startDive(gk, diveY);
     }
 
-    // movement
     const baseS = cfg.gkBaseSpeed * gk.ai.speedMul * speedFactor;
 
     if (gk.diveT > 0) {
       const s = baseS * DIVE_BURST;
 
-      // additional “over/under” on dive to feel human
       const wobble = (Math.random()-0.5) * 10;
       const targetY = clamp(gk.diveY + wobble, b.minY, b.maxY);
 
@@ -955,7 +937,6 @@
       ball.vy = ay * power;
       clampBallSpeed();
 
-      // goalie decision (can be wrong)
       const goalie = penaltyGoalie();
       const b = goalieBounds(goalie);
       const centerY = (g.y1 + g.y2) / 2;
@@ -967,26 +948,24 @@
       let side = (Math.random() < 0.5) ? -1 : 1;
       let targetY = centerY + side*(55 + Math.random()*85);
 
-      // sometimes wrong side
       if (Math.random() < wrongChance) targetY = centerY - (targetY - centerY);
 
-      // add some human randomness anyway
       targetY += (Math.random()-0.5) * 55 * cfg.gkMistake;
-
       targetY = clamp(targetY, b.minY, b.maxY);
 
-      // reaction delay
       goalie.pen.react = clamp(cfg.gkReact * goalie.ai.reactMul + Math.random()*0.20, 0.07, 0.46);
 
-      // if committed, he dives early (can be wrong)
       if (goalie.pen.committed) {
         setTimeout(() => {
-          // might have already ended
           if (!pen.active) return;
           startDive(goalie, targetY);
         }, Math.floor(goalie.pen.react * 1000));
       }
     }
+  }
+
+  function goaleYTarget(goalie, ty){
+    return ty + (Math.random()-0.5) * (goalie.ai.slack * 8);
   }
 
   function updatePenaltyGoalie(dt){
@@ -998,7 +977,6 @@
     goalie.diveT  = Math.max(0, goalie.diveT  - dt);
     goalie.recoveryT = Math.max(0, goalie.recoveryT - dt);
 
-    // pre shot: stay center
     if (!pen.shotLive) {
       const tx = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
       const ty = H/2;
@@ -1011,12 +989,10 @@
       return;
     }
 
-    // if not committed, track later
     const speedFactor = goalie.recoveryT > 0 ? 0.72 : 1.0;
     const baseS = cfg.gkBaseSpeed * goalie.ai.speedMul * speedFactor;
 
     if (!goalie.pen.committed) {
-      // track predicted at goal line but not perfect
       const goalX = goalie.isLeft ? 0 : W;
       let predY = predictBallYAtX(goalX);
       predY = clamp(predY, b.minY, b.maxY);
@@ -1024,7 +1000,6 @@
       predY += (Math.random()-0.5) * (70 * cfg.gkMistake * goalie.ai.slack);
       const ty = clamp(predY, b.minY, b.maxY);
 
-      // occasional late dive
       if (goalie.diveT <= 0 && goalie.diveCd <= 0 && getBallSpeed() > 6.2 && Math.random() < 0.14*cfg.gkDiveAggro) {
         startDive(goalie, ty);
       }
@@ -1039,9 +1014,7 @@
       const tx = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
       goalie.x += clamp(tx - goalie.x, -baseS*0.65, baseS*0.65);
     } else {
-      // committed dive only moves while dive is active
       if (goalie.diveT <= 0) {
-        // little correction to center after dive
         const tx = goalie.isLeft ? (b.minX + 20) : (b.maxX - 20);
         const ty = H/2;
         goalie.x += clamp(tx - goalie.x, -baseS*0.55, baseS*0.55);
@@ -1054,13 +1027,7 @@
 
     updateDiveStripe(goalie);
 
-    // Nerf save power: meno “muro”
     resolveBallCircle(goalie, 9.6);
-  }
-
-  function goaleYTarget(goalie, ty){
-    // tiny human wobble on dive
-    return ty + (Math.random()-0.5) * (goalie.ai.slack * 8);
   }
 
   function updatePenalties(dt){
@@ -1209,8 +1176,6 @@
   function doCollisions(){
     resolveBallCircle(P1, 13.4);
     resolveBallCircle(P2, (gameMode === "bot") ? (DIFF[difficulty]?.botKick || 12) : 13.4);
-
-    // Nerf goalie kick: meno OP
     resolveBallCircle(GK_L, 9.6);
     resolveBallCircle(GK_R, 9.6);
   }
@@ -1318,7 +1283,6 @@
     }
   }
 
-  // IMPORTANT: prevent default to avoid weird form submits / reloads
   on(playBtn, "click", (e) => { e.preventDefault?.(); e.stopPropagation?.(); startMatch(); });
 
   on(againBtn, "click", (e) => {
@@ -1378,6 +1342,4 @@
   setOverlay("", false);
 
   ensurePenaltyHud();
-
-  // Small debug: if buttons still don't work, you’ll see warnings about missing IDs
 })();

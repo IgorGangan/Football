@@ -266,3 +266,19 @@ button.ghost:hover{ background: rgba(255,255,255,.14); }
   text-shadow: 0 3px 14px rgba(0,0,0,.55);
   pointer-events:none;
 }
+
+#overlayText{
+  pointer-events: none; /* IMPORTANTISSIMO: non blocca i click */
+}
+
+#hud, #resultModal, #menu{
+  position: relative;
+  z-index: 50;
+}
+
+#homeBtn, #homeBtn2, #againBtn, #playBtn{
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 60;
+}
+

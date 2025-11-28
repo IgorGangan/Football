@@ -1,3 +1,4 @@
+/* style.css */
 :root{
   --bg:#0f0f10;
   --panel:#1b1b1e;
@@ -8,6 +9,7 @@
 }
 
 *{ box-sizing:border-box; }
+html, body{ height:100%; }
 body{
   margin:0;
   background: radial-gradient(1200px 700px at 50% 40%, #1c1c1f, var(--bg));
@@ -20,7 +22,7 @@ body{
 #menu{
   position:fixed; inset:0;
   display:flex; align-items:center; justify-content:center;
-  z-index:500;
+  z-index:3000;
 }
 #menu .panel{
   width:430px;
@@ -84,20 +86,28 @@ body{
   border-radius:12px;
   box-shadow: var(--shadow);
   background:#23b75f;
-  z-index:50;
+  z-index:100;
+
+  /* responsive scaling for iPad/mobile */
+  width: min(96vw, 1100px);
+  height: auto;
+  max-height: 78vh;
 }
 
 /* HUD */
 #hud{
   position:fixed;
-  top:10px;
+  top: calc(10px + env(safe-area-inset-top));
   left:10px;
   right:10px;
   display:none;
   gap:10px;
   align-items:stretch;
-  z-index:1000;
-  pointer-events:none;
+  z-index:2000;
+
+  /* IMPORTANT: keep clicks working on iOS */
+  pointer-events: auto;
+
   color:#fff;
   text-shadow: 0 3px 14px rgba(0,0,0,.55);
 }
@@ -111,12 +121,16 @@ body{
   gap:10px;
   backdrop-filter: blur(6px);
 }
+
+/* only left box clickable (HOME). mid/right do not block gameplay */
+.hudBox.mid, .hudBox.right{ pointer-events:none; }
+.hudBox.left{ pointer-events:auto; }
+
 .hudBox.left{ width:160px; justify-content:flex-start; }
 .hudBox.mid{ flex:1; justify-content:center; flex-direction:column; }
 .hudBox.right{ width:220px; justify-content:center; }
 
 #homeBtn{
-  pointer-events:auto;
   border:none;
   background: rgba(255,255,255,.18);
   color:white;
@@ -167,7 +181,7 @@ body{
   text-shadow:0 0 32px rgba(0,0,0,.75);
   opacity:0;
   transition:.16s;
-  z-index:2000;
+  z-index:2500;
   pointer-events:none;
 }
 
@@ -177,8 +191,9 @@ body{
   display:none;
   align-items:center;
   justify-content:center;
-  z-index:3000;
+  z-index:4000;
   background: rgba(0,0,0,.55);
+  pointer-events:auto;
 }
 #resultModal .panel{
   width:420px;
@@ -225,7 +240,7 @@ button.ghost:hover{ background: rgba(255,255,255,.14); }
   left:0; right:0; bottom:0;
   height:180px;
   display:none;
-  z-index:1500;
+  z-index:1800;
   pointer-events:none;
 }
 .joyWrap{
@@ -266,19 +281,3 @@ button.ghost:hover{ background: rgba(255,255,255,.14); }
   text-shadow: 0 3px 14px rgba(0,0,0,.55);
   pointer-events:none;
 }
-
-#overlayText{
-  pointer-events: none; /* IMPORTANTISSIMO: non blocca i click */
-}
-
-#hud, #resultModal, #menu{
-  position: relative;
-  z-index: 50;
-}
-
-#homeBtn, #homeBtn2, #againBtn, #playBtn{
-  pointer-events: auto;
-  cursor: pointer;
-  z-index: 60;
-}
-

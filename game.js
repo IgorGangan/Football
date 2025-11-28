@@ -265,7 +265,7 @@
 
   // ---------------- Entities (BIG PLAYERS / SMALL GK HERE) ----------------
   const PLAYER_R = 26;   // BIG
-  const GOALIE_R = 13;   // SMALL
+  const GOALIE_R = 16;   // SMALL
 
   const P1 = { name:"P1", x:240, y:H/2, r:PLAYER_R, speed:5.35, color:"#1a66ff", lastDirX:1, lastDirY:0 };
   const P2 = { name:"P2", x:W-240, y:H/2, r:PLAYER_R, speed:5.35, color:"#ff9f1a", lastDirX:-1, lastDirY:0 };
